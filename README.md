@@ -1,0 +1,69 @@
+# lemonade-host
+
+Publish a folder to [Lemonade Host](https://lemonadehost.com) from your terminal.
+
+> The package is **`lemonade-host`**. The plain `lemonade` name on npm
+> belongs to somebody else, so `npx lemonade …` would download and run their
+> package, not this one. Installed globally the command is still `lemonade`.
+
+```bash
+npx lemonade-host deploy
+```
+
+That's the whole thing. It zips the current folder, uploads it, and prints
+the live URL.
+
+## Setup, once
+
+Mint a deploy token in your dashboard — **Deploy tools → Deploy token** —
+and save it:
+
+```bash
+npx lemonade-host login
+```
+
+It asks for the token and the site, and writes them to `~/.lemonade`
+with permissions only you can read. Or set `LEMONADE_TOKEN` and
+`LEMONADE_SITE` in the environment instead, which is what CI wants.
+
+## Commands
+
+| | |
+|---|---|
+| `lemonade deploy [dir]` | Zip a folder and publish it. Defaults to `.`, and prefers `dist/`, `build/`, `out/` or `public/` if one exists |
+| `lemonade status` | The last few deploys for this site |
+| `lemonade login` | Save a token and site id to `~/.lemonade` |
+| `lemonade whoami` | Which site the current token points at |
+
+Useful flags: `--token`, `--site`, `--origin` (for staging), `--yes` (skip
+the confirmation), `--json` (machine-readable output).
+
+## A token reaches exactly one site
+
+A `lm_` token is minted for a single site and can do two things: publish a
+release to that site, and read that site's deploy history. It cannot spend
+money, cancel anything, change an address, or see another site — so leaving
+one in a CI secret is a bounded risk rather than an open door.
+
+Revoke one any time from the same screen you minted it on.
+
+## In CI
+
+```yaml
+- run: npx lemonade-host deploy ./dist --yes
+  env:
+    LEMONADE_TOKEN: ${{ secrets.LEMONADE_TOKEN }}
+    LEMONADE_SITE:  ${{ secrets.LEMONADE_SITE }}
+```
+
+Exit code is 0 on a successful publish and non-zero on anything else, so a
+failed deploy fails the job.
+
+## Limits
+
+256 MB per upload, 25 MB per file, 20,000 files, 1 GB extracted. Dotfiles,
+`node_modules`, `.git` and friends are skipped unless you pass
+`--include-hidden`.
+
+Static files only — Lemonade Host serves what you give it and never runs a
+build. Build locally or in CI, then point this at the output folder.

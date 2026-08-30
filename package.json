@@ -1,0 +1,33 @@
+{
+  "name": "lemonade-host",
+  "version": "0.1.0",
+  "description": "Publish a folder to Lemonade Host from your terminal.",
+  "keywords": [
+    "lemonade",
+    "lemonade-host",
+    "static",
+    "hosting",
+    "deploy"
+  ],
+  "homepage": "https://lemonadehost.com/deploy/cli/",
+  "bugs": {
+    "url": "mailto:support@lemonadehost.com"
+  },
+  "license": "MIT",
+  "author": "Analytix Media LLC",
+  "type": "module",
+  "bin": {
+    "lemonade": "./bin/lemonade.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
