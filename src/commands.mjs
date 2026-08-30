@@ -54,18 +54,31 @@ function requireAuth(flags) {
         `  It came from ${cfg.from.token}.`,
     );
   }
-  if (!cfg.site) {
-    throw new Refused(
-      "No site id.\n" +
-        "  Pass --site st_… , set LEMONADE_SITE, or run: lemonade login\n" +
-        "  The id is in the address bar of the site's page in your dashboard.",
-    );
-  }
-  const site = normalizeSite(cfg.site);
-  if (!site) {
+  // The site is OPTIONAL here. A token is minted for exactly one site, so
+  // the credential already implies it — asking for both was making people
+  // repeat something we know, and it made the documented promise ("set
+  // LEMONADE_TOKEN once and never touch it again") untrue. When it is
+  // absent, ask the server: `resolveSite` below.
+  const site = cfg.site ? normalizeSite(cfg.site) : null;
+  if (cfg.site && !site) {
     throw new Refused(`"${cfg.site}" is not a site id — they look like st_….`);
   }
   return { ...cfg, site };
+}
+
+/**
+ * The site this run is about: the one configured, or the one the token was
+ * minted for. One round trip, and only when it is needed.
+ */
+async function resolveSite(cfg) {
+  if (cfg.site) return cfg.site;
+  const me = await call(cfg, `${cfg.origin}/api/deploy/whoami`);
+  if (!me.site) {
+    throw new Refused(
+      "That token did not resolve to a site.\n  Mint a fresh one in your dashboard under Deploy tools.",
+    );
+  }
+  return me.site;
 }
 
 /**
@@ -137,8 +150,10 @@ async function call(cfg, url, init = {}) {
 /* ── deploy ──────────────────────────────────────────────────────────────── */
 
 export async function deploy(args, flags) {
-  const cfg = requireAuth(flags);
-  const { dir, guessed } = chooseDir(args[0]);
+  const base = requireAuth(flags);
+  // `--dir` is what the documentation has always shown; the positional form
+  // is what a shell user reaches for. Both work, and the flag wins.
+  const { dir, guessed } = chooseDir(flags.dir ?? args[0]);
 
   const { files, skipped } = collect(dir, { includeHidden: flags.includeHidden });
   if (files.length === 0) {
@@ -178,6 +193,8 @@ export async function deploy(args, flags) {
         `  Publish the built output rather than the whole project.`,
     );
   }
+
+  const cfg = { ...base, site: await resolveSite(base) };
 
   if (!flags.yes && !flags.json && !(await confirm(`Publish to ${cfg.site}?`))) {
     console.log("Nothing was published.");
@@ -227,7 +244,8 @@ export async function deploy(args, flags) {
 /* ── status ──────────────────────────────────────────────────────────────── */
 
 export async function status(_args, flags) {
-  const cfg = requireAuth(flags);
+  const base = requireAuth(flags);
+  const cfg = { ...base, site: await resolveSite(base) };
   const body = await call(cfg, `${cfg.origin}/api/deploy/${cfg.site}/deployments`);
   const rows = body.deployments ?? [];
 
@@ -254,15 +272,19 @@ export async function status(_args, flags) {
 export async function whoami(_args, flags) {
   const cfg = requireAuth(flags);
   // Asking the SERVER rather than reading the config back: the question is
-  // "does this token still work, and what does it reach", and only one of
-  // those two can be answered locally.
-  await call(cfg, `${cfg.origin}/api/deploy/${cfg.site}/deployments`);
+  // "does this token still work, and what does it reach", and neither half
+  // can be answered locally.
+  const me = await call(cfg, `${cfg.origin}/api/deploy/whoami`);
   if (flags.json) {
-    console.log(JSON.stringify({ ok: true, site: cfg.site, origin: cfg.origin }, null, 2));
+    console.log(JSON.stringify(me, null, 2));
     return 0;
   }
-  console.log(`Token is valid and reaches ${bold(cfg.site)}`);
-  console.log(dim(`  ${cfg.origin} · token from ${cfg.from.token}, site from ${cfg.from.site}`));
+  console.log(`Token is valid and reaches ${bold(me.name)} (${me.site})`);
+  console.log(`  ${me.url}`);
+  if (!me.serving) {
+    console.log(dim("  Not serving yet — this site has not been published from the dashboard."));
+  }
+  console.log(dim(`  ${cfg.origin} · token from ${cfg.from.token}`));
   return 0;
 }
 
@@ -278,20 +300,20 @@ export async function login(_args, flags) {
     if (!looksLikeToken(token)) {
       throw new Refused("That does not look like a deploy token — they start with lm_.");
     }
-    const siteRaw = flags.site ?? (await rl.question("Site id (st_…, or paste the URL): "));
-    const site = normalizeSite(siteRaw);
-    if (!site) throw new Refused("That is not a site id — they look like st_….");
-
     const origin = (flags.origin ?? process.env.LEMONADE_ORIGIN ?? "https://app.lemonadehost.com").replace(/\/+$/, "");
 
-    // Proved before it is saved. Writing an unverified token means the
-    // first real deploy is where you learn it was wrong, and by then the
-    // one place the raw token existed has usually been closed.
-    const probe = { token, site, origin, from: { token: "prompt", site: "prompt" } };
-    await call(probe, `${origin}/api/deploy/${site}/deployments`);
+    // No site prompt. The token names its own site, so asking would be
+    // asking somebody to look up an id we are about to be told anyway —
+    // and this is also how the token is PROVED before it is written down.
+    // Saving an unverified token means the first real deploy is where you
+    // learn it was wrong, by which time the one place the raw value existed
+    // has usually been closed.
+    const probe = { token, origin, from: { token: "prompt", site: null } };
+    const me = await call(probe, `${origin}/api/deploy/whoami`);
 
-    const where = save({ token, site, origin });
+    const where = save({ token, site: me.site, origin });
     console.log(`\n${green("Saved.")} ${dim(where)} (readable only by you)`);
+    console.log(`Publishing to ${bold(me.name)} — ${me.url}`);
     console.log(dim("Now: lemonade deploy"));
     return 0;
   } finally {

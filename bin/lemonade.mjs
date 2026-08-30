@@ -23,7 +23,8 @@ const USAGE = `lemonade — publish a folder to Lemonade Host
 
 Options
   --token lm_…       a deploy token (or set LEMONADE_TOKEN)
-  --site st_…        which site (or set LEMONADE_SITE)
+  --dir FOLDER       which folder to publish (same as the positional argument)
+  --site st_…        which site — only needed if the token reaches more than one
   --origin URL       point at another instance, e.g. staging
   --yes, -y          do not ask before publishing
   --json             machine-readable output
@@ -36,7 +37,7 @@ deploy history. It cannot spend money, cancel anything, or see another site.
 `;
 
 const BOOLEAN = new Set(["yes", "y", "json", "include-hidden", "help", "h", "version", "v"]);
-const VALUED = new Set(["token", "site", "origin"]);
+const VALUED = new Set(["token", "site", "origin", "dir"]);
 
 function parse(argv) {
   const args = [];

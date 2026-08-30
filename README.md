@@ -22,20 +22,21 @@ and save it:
 npx lemonade-host login
 ```
 
-It asks for the token and the site, and writes them to `~/.lemonade`
-with permissions only you can read. Or set `LEMONADE_TOKEN` and
-`LEMONADE_SITE` in the environment instead, which is what CI wants.
+It asks for the token — nothing else. A token is minted for one site, so it
+already knows where to publish. The answer is written to `~/.lemonade` with
+permissions only you can read. Or set `LEMONADE_TOKEN` in the environment
+instead, which is what CI wants.
 
 ## Commands
 
 | | |
 |---|---|
-| `lemonade deploy [dir]` | Zip a folder and publish it. Defaults to `.`, and prefers `dist/`, `build/`, `out/` or `public/` if one exists |
+| `lemonade deploy [dir]` | Zip a folder and publish it. Defaults to `.`, and prefers `dist/`, `build/`, `out/` or `public/` if one exists. `--dir` does the same thing |
 | `lemonade status` | The last few deploys for this site |
-| `lemonade login` | Save a token and site id to `~/.lemonade` |
+| `lemonade login` | Save a token to `~/.lemonade` |
 | `lemonade whoami` | Which site the current token points at |
 
-Useful flags: `--token`, `--site`, `--origin` (for staging), `--yes` (skip
+Useful flags: `--dir`, `--token`, `--origin` (for staging), `--yes` (skip
 the confirmation), `--json` (machine-readable output).
 
 ## A token reaches exactly one site
@@ -53,7 +54,6 @@ Revoke one any time from the same screen you minted it on.
 - run: npx lemonade-host deploy ./dist --yes
   env:
     LEMONADE_TOKEN: ${{ secrets.LEMONADE_TOKEN }}
-    LEMONADE_SITE:  ${{ secrets.LEMONADE_SITE }}
 ```
 
 Exit code is 0 on a successful publish and non-zero on anything else, so a
