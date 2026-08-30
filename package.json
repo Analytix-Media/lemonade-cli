@@ -17,7 +17,7 @@
   "author": "Analytix Media LLC",
   "type": "module",
   "bin": {
-    "lemonade": "./bin/lemonade.mjs"
+    "lemonade": "bin/lemonade.mjs"
   },
   "files": [
     "bin",
