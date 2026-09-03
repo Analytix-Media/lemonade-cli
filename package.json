@@ -10,8 +10,12 @@
     "deploy"
   ],
   "homepage": "https://lemonadehost.com/deploy/cli/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Analytix-Media/lemonade-cli.git"
+  },
   "bugs": {
-    "url": "mailto:support@lemonadehost.com"
+    "url": "https://github.com/Analytix-Media/lemonade-cli/issues"
   },
   "license": "MIT",
   "author": "Analytix Media LLC",
