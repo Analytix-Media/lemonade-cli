@@ -42,6 +42,17 @@ const SKIP_DIRS = new Set([
   "__pycache__",
 ]);
 
+/**
+ * The one dot-directory that IS the website.
+ *
+ * `.well-known/` is where the web agrees to put proof-of-ownership files:
+ * a domain verification for Google or Microsoft, `apple-app-site-association`,
+ * `security.txt`, an ACME challenge. Skipping it as "hidden" means the
+ * customer uploads the folder, sees no error, and then fails a verification
+ * they cannot debug — the worst shape a bug can take.
+ */
+const KEEP_DOT_DIRS = new Set([".well-known"]);
+
 /** Files that are somebody's secret, not their website. */
 const SKIP_FILES = new Set([
   ".env",
@@ -88,7 +99,11 @@ export function collect(root, { includeHidden = false } = {}) {
         continue;
       }
       if (entry.isDirectory()) {
-        if (!includeHidden && (SKIP_DIRS.has(name) || name.startsWith("."))) {
+        // KEEP_DOT_DIRS is checked first: `.well-known` starts with a dot,
+        // so the hidden rule below would swallow it. The file branch had
+        // this carve-out already, where it could never fire — a directory
+        // never reaches it.
+        if (!includeHidden && !KEEP_DOT_DIRS.has(name) && (SKIP_DIRS.has(name) || name.startsWith("."))) {
           skipped.hidden++;
           continue;
         }
@@ -96,7 +111,10 @@ export function collect(root, { includeHidden = false } = {}) {
         continue;
       }
       if (!entry.isFile()) continue;
-      if (!includeHidden && name.startsWith(".") && name !== ".well-known") {
+      // No carve-out here: files INSIDE `.well-known/` are ordinary names
+      // (`security.txt`, `apple-app-site-association`), so they never hit
+      // this rule. A file literally called `.well-known` is not a website.
+      if (!includeHidden && name.startsWith(".")) {
         skipped.hidden++;
         continue;
       }

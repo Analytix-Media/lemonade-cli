@@ -146,3 +146,22 @@ test("the order is stable, so the same folder makes the same archive", () => {
   assert.deepEqual(once, twice);
   assert.deepEqual(once, ["a.html", "b.html", "c/d.html"]);
 });
+
+test(".well-known is published, because it is the website's proof of itself", () => {
+  const root = tmpdir();
+  write(root, "index.html", "hi");
+  write(root, ".well-known/security.txt", "Contact: mailto:support@lemonadehost.com");
+  write(root, ".well-known/apple-app-site-association", "{}");
+  // A genuinely hidden folder alongside it, so this asserts the carve-out
+  // and not that the hidden rule stopped working.
+  write(root, ".cache/junk.html", "x");
+
+  const { files } = collect(root);
+  const rels = files.map((f) => f.rel);
+  assert.ok(
+    rels.includes(".well-known/security.txt"),
+    "a domain verification file that never uploads fails a check nobody can debug",
+  );
+  assert.ok(rels.includes(".well-known/apple-app-site-association"));
+  assert.ok(!rels.some((r) => r.startsWith(".cache/")), "other dot-directories are still skipped");
+});
