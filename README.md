@@ -41,10 +41,17 @@ the confirmation), `--json` (machine-readable output).
 
 ## A token reaches exactly one site
 
-A `lm_` token is minted for a single site and can do two things: publish a
-release to that site, and read that site's deploy history. It cannot spend
-money, cancel anything, change an address, or see another site — so leaving
-one in a CI secret is a bounded risk rather than an open door.
+A `lm_` token is minted for a single site. Every token can read that site
+and publish a release to it. Two more permissions are off unless you tick
+them when you make the token: rolling back to an earlier version, and moving
+the site to the trash (which takes it offline). A token cannot spend money,
+change an address, or see another site, and without the trash permission it
+cannot take the site offline - so leaving a default token in a CI secret is a
+bounded risk rather than an open door.
+
+A request the token was not given is refused with a message naming the
+permission it needs. `lemonade whoami --json` shows the token's permissions.
+Tokens made before permissions existed can read, publish and roll back.
 
 Revoke one any time from the same screen you minted it on.
 
