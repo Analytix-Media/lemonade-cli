@@ -9,7 +9,7 @@
     "hosting",
     "deploy"
   ],
-  "homepage": "https://lemonadehost.com/deploy/cli/",
+  "homepage": "https://lemonadehost.com/publish/cli/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Analytix-Media/lemonade-cli.git"
