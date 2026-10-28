@@ -22,8 +22,9 @@ npx lemonade-host login
 It shows a short code and a page to open. Sign in there, check the code
 matches, pick your site and press Approve (we email you a 6-digit code to
 confirm it is you). The terminal picks it up by itself: no token to copy.
-The first `lemonade deploy` does the same if you have not logged in yet, so
-an AI assistant running it for you only needs you to approve once.
+At a terminal, the first `lemonade deploy` does the same if you have not
+logged in yet. An AI assistant runs `lemonade login` first, shows you the
+code and the page, and carries on once you approve.
 
 What it saves can publish to that one site and read what is live. It is
 written to `~/.lemonade` with permissions only you can read, and it stops

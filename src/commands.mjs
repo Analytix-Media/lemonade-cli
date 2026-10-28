@@ -50,7 +50,8 @@ const inCI = () => Boolean(process.env.CI) && process.env.CI !== "false";
  */
 async function ensureAuth(flags) {
   const cfg = resolve(flags);
-  if (cfg.token || inCI() || flags.json) return requireAuth(flags);
+  // Only with a person at a terminal: a script (or an AI assistant) runs `lemonade login` first, on purpose, and is never left waiting by a deploy.
+  if (cfg.token || inCI() || flags.json || !stdin.isTTY) return requireAuth(flags);
   const got = await approveInBrowser(cfg.origin);
   return requireAuth({ ...flags, token: got.token, site: got.site.id });
 }
