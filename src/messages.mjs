@@ -16,7 +16,7 @@
 export const MESSAGES = {
   /* auth and scope */
   unauthorized:
-    "That token was refused. Mint a fresh one in your dashboard under Deploy tools, then run: lemonade login",
+    "That token was refused. Run: lemonade login  (you approve it in your browser), or make a new one in your dashboard under Developers.",
   not_found:
     "No site with that id, or this token was minted for a different one. A token reaches exactly one site — check the id with: lemonade whoami",
 

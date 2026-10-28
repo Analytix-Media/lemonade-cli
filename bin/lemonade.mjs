@@ -18,7 +18,7 @@ const USAGE = `lemonade — publish a folder to Lemonade Host
 
   lemonade deploy [folder]   zip it and publish it (defaults to the built output)
   lemonade status            the last few deploys for this site
-  lemonade login             save a deploy token and site id to ~/.lemonade
+  lemonade login             approve this computer in your browser (or --token lm_… to paste one)
   lemonade whoami            check the token, and which site it reaches
 
 Options

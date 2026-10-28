@@ -14,6 +14,7 @@ import { stdin, stdout } from "node:process";
 import { CONFIG_PATH, looksLikeToken, normalizeSite, resolve, save } from "./config.mjs";
 import { explain } from "./messages.mjs";
 import { collect, zipFiles } from "./zip.mjs";
+import { deviceLogin } from "./device.mjs";
 
 const MAX_UPLOAD = 256 * 1024 * 1024;
 
@@ -39,12 +40,35 @@ export class Refused extends Error {
   }
 }
 
+/** CI has no person to approve anything: a token comes from the environment there. */
+const inCI = () => Boolean(process.env.CI) && process.env.CI !== "false";
+
+/**
+ * The token, or, with none anywhere and a person present, the browser
+ * approval (src/device.mjs), saved for next time. In CI it refuses with
+ * the one fix: LEMONADE_TOKEN.
+ */
+async function ensureAuth(flags) {
+  const cfg = resolve(flags);
+  if (cfg.token || inCI() || flags.json) return requireAuth(flags);
+  const got = await approveInBrowser(cfg.origin);
+  return requireAuth({ ...flags, token: got.token, site: got.site.id });
+}
+
+async function approveInBrowser(origin) {
+  const got = await deviceLogin({ origin, client: process.env.LEMONADE_CLIENT === "mcp" ? "mcp" : "cli" });
+  const where = save({ token: got.token, site: got.site.id, origin });
+  console.log(`\n${green("Approved.")} Publishing to ${bold(got.site.name)}${got.site.address ? ` (${got.site.address})` : ""}`);
+  console.log(dim(`  Saved to ${where} (readable only by you).`));
+  return got;
+}
+
 function requireAuth(flags) {
   const cfg = resolve(flags);
   if (!cfg.token) {
     throw new Refused(
       "No deploy token.\n" +
-        "  Mint one in your dashboard under Deploy tools, then run: lemonade login\n" +
+        "  Run: lemonade login  (you approve it in your browser)\n" +
         "  Or set LEMONADE_TOKEN in the environment (which is what CI wants).",
     );
   }
@@ -75,7 +99,7 @@ async function resolveSite(cfg) {
   const me = await call(cfg, `${cfg.origin}/api/deploy/whoami`);
   if (!me.site) {
     throw new Refused(
-      "That token did not resolve to a site.\n  Mint a fresh one in your dashboard under Deploy tools.",
+      "That token did not resolve to a site.\n  Run: lemonade login  (or make a new token in your dashboard under Developers).",
     );
   }
   return me.site;
@@ -150,7 +174,7 @@ async function call(cfg, url, init = {}) {
 /* ── deploy ──────────────────────────────────────────────────────────────── */
 
 export async function deploy(args, flags) {
-  const base = requireAuth(flags);
+  const base = await ensureAuth(flags);
   // `--dir` is what the documentation has always shown; the positional form
   // is what a shell user reaches for. Both work, and the flag wins.
   const { dir, guessed } = chooseDir(flags.dir ?? args[0]);
@@ -291,9 +315,16 @@ export async function whoami(_args, flags) {
 /* ── login ───────────────────────────────────────────────────────────────── */
 
 export async function login(_args, flags) {
+  // No token given: approve in the browser. --token keeps the paste path (CI, scripts).
+  if (!flags.token) {
+    const origin = (flags.origin ?? process.env.LEMONADE_ORIGIN ?? "https://app.lemonadehost.com").replace(/\/+$/, "");
+    await approveInBrowser(origin);
+    console.log(dim("Now: lemonade deploy"));
+    return 0;
+  }
   const rl = readline.createInterface({ input: stdin, output: stdout });
   try {
-    console.log("Mint a deploy token in your dashboard, under Deploy tools.");
+    console.log("Paste a deploy token from your dashboard, under Developers > Tokens.");
     console.log(dim("It is shown once — there is no copy on our side to read back.\n"));
 
     const token = (flags.token ?? (await rl.question("Deploy token (lm_…): "))).trim();
