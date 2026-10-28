@@ -53,8 +53,10 @@ export async function deviceLogin({ origin, client = "cli", deviceName = os.host
 
   say("");
   say("To let this computer publish, approve it in your browser:");
-  say(`  1. Open   ${start.verification_uri_complete ?? start.verification_uri}`);
-  say(`  2. Check the code says  ${start.user_code}`);
+  // Always the plain page: the person types the code this terminal shows (a
+  // link with the code already in it is what a phisher would send).
+  say(`  1. Open   ${start.verification_uri}`);
+  say(`  2. Type the code  ${start.user_code}`);
   say("  3. Pick your site and press Approve");
   say("");
   say("Waiting for you to approve...");

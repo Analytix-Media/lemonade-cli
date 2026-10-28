@@ -28,6 +28,10 @@ test("waits while pending, slows down when told, and returns the token once appr
   assert.equal(got.site.id, "st_1");
   assert.deepEqual(waits, [5000, 5000, 10000]);
   assert.ok(lines.some((l) => l.includes("BDKM-QTRS")));
+  // The plain page, never a link that fills the code in (even from an older server that sends one).
+  assert.ok(lines.some((l) => l.includes("https://app/portal/cli")));
+  assert.ok(!lines.some((l) => l.includes("?code=")));
+  assert.ok(lines.some((l) => /type the code/i.test(l)));
   assert.equal(calls[0].body.deviceName, "laptop");
   assert.equal(calls[1].body.device_code, "lmd_x");
 });
