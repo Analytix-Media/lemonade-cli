@@ -283,11 +283,13 @@ export async function status(_args, flags) {
     return 0;
   }
   for (const row of rows.slice(0, 10)) {
-    const when = row.createdAt ? new Date(row.createdAt).toISOString().replace("T", " ").slice(0, 16) : "";
+    // The person's own clock, not UTC (developers walkthrough, 26 Oct 2026).
+    const when = row.createdAt
+      ? new Date(row.createdAt).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+      : "";
     const mark = row.status === "active" ? green("●") : row.status === "failed" ? "✗" : dim("○");
-    console.log(
-      `${mark} ${when}  ${String(row.status).padEnd(10)} ${dim(`${row.source ?? ""} ${row.fileCount ?? ""} files`)}`,
-    );
+    const files = typeof row.fileCount === "number" ? `${row.fileCount} file${row.fileCount === 1 ? "" : "s"}` : "";
+    console.log(`${mark} ${when}  ${String(row.status).padEnd(10)} ${dim(`${row.source ?? ""} ${files}`.trim())}`);
   }
   return 0;
 }
