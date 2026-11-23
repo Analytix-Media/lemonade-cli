@@ -1,6 +1,6 @@
 {
   "name": "lemonade-host",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Publish a folder to Lemonade Host from your terminal.",
   "keywords": [
     "lemonade",
@@ -26,12 +26,14 @@
   "files": [
     "bin",
     "src",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "npm test"
   }
 }

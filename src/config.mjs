@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Refused } from "./errors.mjs";
 
 export const CONFIG_PATH = path.join(os.homedir(), ".lemonade");
 export const DEFAULT_ORIGIN = "https://app.lemonadehost.com";
@@ -26,18 +27,23 @@ export const DEFAULT_ORIGIN = "https://app.lemonadehost.com";
 /** Everything the commands need, resolved. Never contains a printed token. */
 export function resolve(flags = {}) {
   const file = load();
+  // A token from a flag or the environment is a DIFFERENT credential from the one saved by `login`:
+  // pairing it with the saved site (and origin) sent a CI token to the wrong site. It only borrows
+  // the saved site when the token itself came from the file.
+  const explicitToken = flags.token ?? process.env.LEMONADE_TOKEN ?? null;
+  const saved = explicitToken ? {} : file;
   const origin =
-    flags.origin ?? process.env.LEMONADE_ORIGIN ?? file.origin ?? DEFAULT_ORIGIN;
+    flags.origin ?? process.env.LEMONADE_ORIGIN ?? saved.origin ?? DEFAULT_ORIGIN;
   return {
-    token: flags.token ?? process.env.LEMONADE_TOKEN ?? file.token ?? null,
-    site: flags.site ?? process.env.LEMONADE_SITE ?? file.site ?? null,
+    token: explicitToken ?? file.token ?? null,
+    site: flags.site ?? process.env.LEMONADE_SITE ?? saved.site ?? null,
     origin: origin.replace(/\/+$/, ""),
     // Where each one came from, for the error messages. Saying "no token"
     // to somebody who has one in ~/.lemonade and a typo in the env is not
     // an answer.
     from: {
       token: flags.token ? "--token" : process.env.LEMONADE_TOKEN ? "LEMONADE_TOKEN" : file.token ? CONFIG_PATH : null,
-      site: flags.site ? "--site" : process.env.LEMONADE_SITE ? "LEMONADE_SITE" : file.site ? CONFIG_PATH : null,
+      site: flags.site ? "--site" : process.env.LEMONADE_SITE ? "LEMONADE_SITE" : saved.site ? CONFIG_PATH : null,
     },
   };
 }
@@ -48,7 +54,7 @@ export function load() {
   // Group or other can read it. On Windows the mode bits are not meaningful,
   // so this only bites where it means something.
   if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
-    throw new Error(
+    throw new Refused(
       `${CONFIG_PATH} is readable by other users, and it holds a deploy token.\n` +
         `  Fix it with:  chmod 600 ${CONFIG_PATH}\n` +
         `  Or revoke the token in your dashboard and mint a new one.`,
@@ -58,7 +64,7 @@ export function load() {
     const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
-    throw new Error(`${CONFIG_PATH} is not valid JSON. Delete it and run: lemonade login`);
+    throw new Refused(`${CONFIG_PATH} is not valid JSON. Delete it and run: npx lemonade-host login`);
   }
 }
 

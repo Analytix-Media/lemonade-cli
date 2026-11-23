@@ -16,15 +16,19 @@
 export const MESSAGES = {
   /* auth and scope */
   unauthorized:
-    "That token was refused. Run: lemonade login  (you approve it in your browser), or make a new one in your dashboard under Developers.",
+    "That token was refused. Run: npx lemonade-host login  (you approve it in your browser), or make a new one in your dashboard under Developers > Tokens.",
+  missing_permission:
+    "This token isn't allowed to do that. Make a new one in your dashboard under Developers > Tokens, with a Publish or Manage scope.",
   not_found:
-    "No site with that id, or this token was minted for a different one. A token reaches exactly one site — check the id with: lemonade whoami",
+    "No site with that id, or this token was minted for a different one. A token reaches exactly one site — check the id with: npx lemonade-host whoami",
 
   /* traffic */
   deploy_in_progress:
     "A deploy for this site is already running. Wait for it to finish — it will not be long.",
-  rate_limited:
-    "Too many deploys in a row for this site. Wait a minute and try again.",
+  // {wait} is filled from the server's Retry-After (see explain).
+  rate_limited: "Too many deploys in a row for this site. Try again in {wait}.",
+  slow_down: "Too many requests. Try again in {wait}.",
+  server_busy: "The publish queue is full right now. Nothing was published; try again in {wait}.",
   too_large:
     "That folder is over the 256 MB upload limit. Publish the built output rather than the whole project — dist/ or build/ — or drop the largest files.",
   empty_body: "There was nothing to upload.",
@@ -46,15 +50,48 @@ export const MESSAGES = {
     "That release would take the site over its 1 GB of storage.",
   not_a_zip: "The upload did not arrive as a readable archive. Try again.",
 
+  /* rolling back */
+  no_such_release: "No release with that id on this site. Run: npx lemonade-host status  to see the ids.",
+  already_live: "That version is already the one live.",
+  release_expired: "That version is older than 7 days, so it can't be restored any more.",
+  template_not_entitled: "That version used a design this site no longer has. Pick a newer version.",
+  never_live: "That version never went live, so there is nothing to go back to. Pick one marked live before.",
+  scan_pending: "That version is still being checked, so it can't be restored yet. Try again in a few minutes.",
+
+  /* what a finished publish says (the catalog's lines, by state) */
+  waiting: "Checking your files, live in a moment. Your previous version keeps serving until the check passes.",
+  scan_pending_publish: "Uploaded. We're still checking the files; the site shows the previous version until that passes.",
+  not_live_yet: "Uploaded, but the site isn't live yet. Publish it from your dashboard and this version goes live the moment you do.",
+  blocked: "Uploaded, but this version is offline. Our safety check flagged it and it is under review. Nothing was deleted; check your email.",
+
+  /* why a token was not accepted (from /api/deploy/whoami "reason") */
+  revoked: "This token was revoked, so it isn't accepted any more. Make a new one in Developers > Tokens, or run: npx lemonade-host login",
+  ended: "This token has ended, so it isn't accepted any more. Make a new one in Developers > Tokens, or run: npx lemonade-host login",
+  site_in_trash: "The site this token belongs to is in the trash. Restore it from Trash in your dashboard, or log in for another site: npx lemonade-host login",
+  not_accepted: "This token isn't accepted. Check that you copied all of it (it starts with lm_), or run: npx lemonade-host login",
+
   /* the box */
   site_not_found: "That site no longer exists.",
   failed:
     "The deploy failed on our side. Nothing changed — your previous version is still live. If it happens twice, email support@lemonadehost.com.",
 };
 
-export function explain(code, fallbackMessage) {
-  if (code && MESSAGES[code]) return MESSAGES[code];
-  if (fallbackMessage) return fallbackMessage;
-  if (code) return `The server refused it: ${code}`;
-  return "The server refused it.";
+/** "2732 seconds" is not a sentence: 45 minutes is. */
+export function waitWords(seconds) {
+  const n = Number(seconds);
+  if (!Number.isFinite(n) || n <= 0) return "a minute";
+  if (n < 90) return `${Math.ceil(n)} seconds`;
+  if (n < 5400) return `${Math.ceil(n / 60)} minutes`;
+  const h = Math.ceil(n / 3600);
+  return `${h} hour${h === 1 ? "" : "s"}`;
+}
+
+/**
+ * The sentence for a server error. `retryAfter` is the Retry-After header in
+ * seconds (rate limits and a busy server send it); without one it says "a
+ * minute". The server's own `message` is used when we have no line for the code.
+ */
+export function explain(code, fallbackMessage, { retryAfter = null } = {}) {
+  const line = code && MESSAGES[code] ? MESSAGES[code] : fallbackMessage ? fallbackMessage : code ? `The server refused it: ${code}` : "The server refused it.";
+  return line.replace("{wait}", waitWords(retryAfter));
 }

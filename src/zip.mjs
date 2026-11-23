@@ -25,6 +25,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { crc32 } from "./crc32.mjs";
+import { Refused } from "./errors.mjs";
 
 /** Directories nobody means to publish. Skipped unless --include-hidden. */
 const SKIP_DIRS = new Set([
@@ -53,19 +54,31 @@ const SKIP_DIRS = new Set([
  */
 const KEEP_DOT_DIRS = new Set([".well-known"]);
 
+/** Operating-system junk: skipped unless --include-hidden. */
+const JUNK_FILES = new Set([".DS_Store", "Thumbs.db"]);
+
 /** Files that are somebody's secret, not their website. */
-const SKIP_FILES = new Set([
+const SECRET_NAMES = new Set([
   ".env",
-  ".env.local",
-  ".env.production",
-  ".env.development",
   ".npmrc",
   ".netrc",
   "id_rsa",
   "id_ed25519",
-  ".DS_Store",
-  "Thumbs.db",
+  "id_ecdsa",
+  "credentials.json",
+  "service-account.json",
 ]);
+
+/**
+ * A secret by NAME, and the guard is ALWAYS on: --include-hidden brings in
+ * dotfiles and node_modules, never these (a published site is public, and a
+ * private key or an .env in it is leaked the moment it is live).
+ */
+export function isSecretName(name) {
+  const n = name.toLowerCase();
+  return SECRET_NAMES.has(n) || n.startsWith(".env.") || n.endsWith(".pem") || n.endsWith(".key") || n.endsWith(".p12") || n.endsWith(".pfx");
+}
+
 
 /**
  * Every file under `root`, as { rel, abs, size }.
@@ -76,14 +89,14 @@ const SKIP_FILES = new Set([
  */
 export function collect(root, { includeHidden = false } = {}) {
   const out = [];
-  const skipped = { hidden: 0, symlink: 0, secret: 0 };
+  const skipped = { hidden: 0, symlink: 0, secret: 0, secretFiles: [] };
 
   const walk = (dir, prefix) => {
     let entries;
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch (err) {
-      throw new Error(`cannot read ${dir}: ${err.message}`);
+      throw new Refused(`Can't read ${dir}: ${err.message}\n  Nothing was published. Check the folder's permissions.`);
     }
     for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
       const name = entry.name;
@@ -94,8 +107,13 @@ export function collect(root, { includeHidden = false } = {}) {
         skipped.symlink++;
         continue;
       }
-      if (!includeHidden && SKIP_FILES.has(name)) {
+      if (entry.isFile() && isSecretName(name)) {
         skipped.secret++;
+        skipped.secretFiles.push(rel);
+        continue;
+      }
+      if (!includeHidden && JUNK_FILES.has(name)) {
+        skipped.hidden++;
         continue;
       }
       if (entry.isDirectory()) {

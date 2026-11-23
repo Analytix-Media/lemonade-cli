@@ -37,7 +37,8 @@ browser.
 | | |
 |---|---|
 | `lemonade deploy [dir]` | Zip a folder and publish it. Defaults to `.`, and prefers `dist/`, `build/`, `out/` or `public/` if one exists. `--dir` does the same thing |
-| `lemonade status` | The last few deploys for this site |
+| `lemonade status` | The site's address and its last deploys, with ids and why one failed |
+| `lemonade rollback [id]` | Go back to an earlier version (the newest one that was live before, or the id you name) |
 | `lemonade login` | Approve this computer in your browser (or `--token` to paste one) |
 | `lemonade whoami` | Which site the current token points at |
 
@@ -46,10 +47,10 @@ the confirmation), `--json` (machine-readable output).
 
 ## A token reaches exactly one site
 
-A `lm_` token is minted for a single site. Every token can read that site
-and publish a release to it. Two more permissions are off unless you tick
-them when you make the token: rolling back to an earlier version, and moving
-the site to the trash (which takes it offline). A token cannot spend money,
+A `lm_` token is minted for a single site. A token has one of three scopes: Read-only (see files and versions), Publish
+(also upload, publish and roll back) or Manage (Publish, plus moving the site
+to the trash, which still needs the owner's approval). Tokens end after a year
+unless made otherwise, and we email you 14 days before. A token cannot spend money,
 change an address, or see another site, and without the trash permission it
 cannot take the site offline - so leaving a default token in a CI secret is a
 bounded risk rather than an open door.
@@ -73,9 +74,10 @@ failed deploy fails the job.
 
 ## Limits
 
-256 MB per upload, 25 MB per file, 20,000 files, 1 GB extracted. Dotfiles,
+100 MB per upload, 25 MB per file, 20,000 files. Dotfiles,
 `node_modules`, `.git` and friends are skipped unless you pass
-`--include-hidden`.
+`--include-hidden`. Secret files (`.env`, keys, `credentials.json`) are never
+published, even then.
 
 Static files only — Lemonade Host serves what you give it and never runs a
 build. Build locally or in CI, then point this at the output folder.

@@ -1,6 +1,5 @@
 /**
- * "Approve in the browser": how `lemonade login` (and a first `lemonade
- * deploy` with no token) gets a token without anyone pasting one. The
+ * "Approve in the browser": how `npx lemonade-host login` (and a first `deploy` with no token) gets a token without anyone pasting one. The
  * device code flow the app serves (lib/developer/device-login):
  *
  *   1. POST /api/cli/device -> a short code to show, and a page to approve it on
@@ -12,6 +11,7 @@
  */
 
 import os from "node:os";
+import { waitWords } from "./messages.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -48,7 +48,8 @@ export async function deviceLogin({ origin, client = "cli", deviceName = os.host
   }
   const start = await json(res);
   if (!res.ok || !start?.device_code) {
-    throw new DeviceError(res.status === 429 ? "Too many sign-in attempts from here. Wait ten minutes, then try again." : `Could not start sign-in (HTTP ${res.status}).`);
+    const wait = Number(res.headers?.get?.("retry-after"));
+    throw new DeviceError(res.status === 429 ? `Too many sign-in attempts from here. Try again in ${waitWords(wait)}.` : `Could not start sign-in (HTTP ${res.status}).`);
   }
 
   say("");

@@ -1,5 +1,5 @@
 /**
- * The four commands, and the one HTTP call underneath them.
+ * The commands, and the one HTTP call underneath them.
  *
  * Everything here talks to the deploy API a browser session also uses — the
  * CLI is an adapter onto it, not a second way in, so the gate order it meets
@@ -12,16 +12,19 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { CONFIG_PATH, looksLikeToken, normalizeSite, resolve, save } from "./config.mjs";
-import { explain } from "./messages.mjs";
+import { explain, MESSAGES, waitWords } from "./messages.mjs";
+import { Refused } from "./errors.mjs";
 import { collect, zipFiles } from "./zip.mjs";
 import { deviceLogin } from "./device.mjs";
 
-const MAX_UPLOAD = 256 * 1024 * 1024;
+// 100 MB per upload (25 MB per file), the server's limit (decision 1, Nov 2026).
+const MAX_UPLOAD = 100 * 1024 * 1024;
 
 /** Folders that hold BUILT output, in the order we would guess. */
 const BUILD_DIRS = ["dist", "build", "out", "public", "_site"];
 
 const bold = (s) => (stdout.isTTY ? `\u001b[1m${s}\u001b[0m` : s);
+const red = (s) => (stdout.isTTY ? `\u001b[31m${s}\u001b[0m` : s);
 const dim = (s) => (stdout.isTTY ? `\u001b[2m${s}\u001b[0m` : s);
 const green = (s) => (stdout.isTTY ? `\u001b[32m${s}\u001b[0m` : s);
 
@@ -31,14 +34,7 @@ function human(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** A CLI error that is the user's situation, not a stack trace. */
-export class Refused extends Error {
-  constructor(message, { code = null } = {}) {
-    super(message);
-    this.code = code;
-    this.expected = true;
-  }
-}
+export { Refused };
 
 /** CI has no person to approve anything: a token comes from the environment there. */
 const inCI = () => Boolean(process.env.CI) && process.env.CI !== "false";
@@ -50,7 +46,7 @@ const inCI = () => Boolean(process.env.CI) && process.env.CI !== "false";
  */
 async function ensureAuth(flags) {
   const cfg = resolve(flags);
-  // Only with a person at a terminal: a script (or an AI assistant) runs `lemonade login` first, on purpose, and is never left waiting by a deploy.
+  // Only with a person at a terminal: a script (or an AI assistant) runs `npx lemonade-host login` first, on purpose, and is never left waiting by a deploy.
   if (cfg.token || inCI() || flags.json || !stdin.isTTY) return requireAuth(flags);
   const got = await approveInBrowser(cfg.origin);
   return requireAuth({ ...flags, token: got.token, site: got.site.id });
@@ -69,7 +65,7 @@ function requireAuth(flags) {
   if (!cfg.token) {
     throw new Refused(
       "No deploy token.\n" +
-        "  Run: lemonade login  (you approve it in your browser)\n" +
+        "  Run: npx lemonade-host login  (you approve it in your browser)\n" +
         "  Or set LEMONADE_TOKEN in the environment (which is what CI wants).",
     );
   }
@@ -83,27 +79,12 @@ function requireAuth(flags) {
   // the credential already implies it — asking for both was making people
   // repeat something we know, and it made the documented promise ("set
   // LEMONADE_TOKEN once and never touch it again") untrue. When it is
-  // absent, ask the server: `resolveSite` below.
+  // absent, the commands ask the server (whoami).
   const site = cfg.site ? normalizeSite(cfg.site) : null;
   if (cfg.site && !site) {
     throw new Refused(`"${cfg.site}" is not a site id — they look like st_….`);
   }
   return { ...cfg, site };
-}
-
-/**
- * The site this run is about: the one configured, or the one the token was
- * minted for. One round trip, and only when it is needed.
- */
-async function resolveSite(cfg) {
-  if (cfg.site) return cfg.site;
-  const me = await call(cfg, `${cfg.origin}/api/deploy/whoami`);
-  if (!me.site) {
-    throw new Refused(
-      "That token did not resolve to a site.\n  Run: lemonade login  (or make a new token in your dashboard under Developers).",
-    );
-  }
-  return me.site;
 }
 
 /**
@@ -132,13 +113,19 @@ export function chooseDir(arg, cwd = process.cwd()) {
   return { dir: cwd, guessed: false };
 }
 
-async function confirm(question) {
-  if (!stdin.isTTY) return true;
+/** Y/n question. No terminal = no answer: callers decide what that means. */
+async function confirm(question, { defaultYes = true } = {}) {
   const rl = readline.createInterface({ input: stdin, output: stdout });
-  const answer = (await rl.question(`${question} [Y/n] `)).trim().toLowerCase();
+  const answer = (await rl.question(`${question} ${defaultYes ? "[Y/n]" : "[y/N]"} `)).trim().toLowerCase();
   rl.close();
-  return answer === "" || answer === "y" || answer === "yes";
+  if (answer === "") return defaultYes;
+  return answer === "y" || answer === "yes";
 }
+
+const retryAfterSeconds = (res) => {
+  const n = Number(res.headers.get("retry-after"));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
 
 async function call(cfg, url, init = {}) {
   let res;
@@ -161,8 +148,12 @@ async function call(cfg, url, init = {}) {
     /* a proxy or an error page — handled below */
   }
   if (!res.ok || (body && body.ok === false)) {
-    const code = body?.error ?? body?.errorCode ?? null;
-    throw new Refused(explain(code, body?.message ?? null), { code });
+    const retryAfter = retryAfterSeconds(res);
+    // A 429 or 503 without a body still has the one thing a person needs: how long.
+    const code = body?.reason && body?.error === "unauthorized" ? body.reason : body?.error ?? body?.errorCode ?? (res.status === 429 ? "rate_limited" : res.status === 503 ? "server_busy" : null);
+    // A refused token: the server's own sentence says why (and when it ended).
+    const serverLine = body?.error === "unauthorized" && body?.message ? body.message : null;
+    throw new Refused(serverLine ?? explain(code, body?.message ?? null, { retryAfter }), { code, status: res.status, retryAfter });
   }
   if (!body) {
     throw new Refused(
@@ -172,13 +163,19 @@ async function call(cfg, url, init = {}) {
   return body;
 }
 
+/** Who this token is and what it reaches (name for the prompts, state for the honest messages). */
+async function whoIs(cfg) {
+  return call(cfg, `${cfg.origin}/api/deploy/whoami`);
+}
+
 /* ── deploy ──────────────────────────────────────────────────────────────── */
 
 export async function deploy(args, flags) {
   const base = await ensureAuth(flags);
   // `--dir` is what the documentation has always shown; the positional form
   // is what a shell user reaches for. Both work, and the flag wins.
-  const { dir, guessed } = chooseDir(flags.dir ?? args[0]);
+  const explicitDir = flags.dir ?? args[0];
+  const { dir, guessed } = chooseDir(explicitDir);
 
   const { files, skipped } = collect(dir, { includeHidden: flags.includeHidden });
   if (files.length === 0) {
@@ -202,6 +199,10 @@ export async function deploy(args, flags) {
             : ""),
       ),
     );
+    // The secret guard is always on, even with --include-hidden: say which files stayed home.
+    if (skipped.secretFiles.length) {
+      console.log(dim(`  left out as secrets (never published): ${skipped.secretFiles.slice(0, 5).join(", ")}${skipped.secretFiles.length > 5 ? ", …" : ""}`));
+    }
     // Said BEFORE the upload, not after. A site with no index.html serves a
     // 404 at its own address, and finding that out from the live URL is a
     // worse minute than finding it out here.
@@ -214,14 +215,31 @@ export async function deploy(args, flags) {
 
   if (bytes > MAX_UPLOAD) {
     throw new Refused(
-      `That folder is ${human(bytes)}, over the 256 MB upload limit.\n` +
+      `That folder is ${human(bytes)}, over the 100 MB upload limit.\n` +
         `  Publish the built output rather than the whole project.`,
     );
   }
 
-  const cfg = { ...base, site: await resolveSite(base) };
+  // No folder named and no built output found: the current folder is a guess, and it is often the
+  // whole project (source, README, notes). Say so and ask, default No.
+  if (!explicitDir && !guessed) {
+    if (!flags.json && !flags.yes) {
+      console.log(`  ${bold("No dist, build, out, public or _site folder with an index.html here")} - this would publish the current folder as it is.`);
+      if (!stdin.isTTY) {
+        throw new Refused("Pass the folder to publish (npx lemonade-host deploy ./dist), or --yes to publish this one.");
+      }
+      if (!(await confirm("Publish the current folder anyway?", { defaultYes: false }))) {
+        console.log("Nothing was published.");
+        return 1;
+      }
+    }
+  }
 
-  if (!flags.yes && !flags.json && !(await confirm(`Publish to ${cfg.site}?`))) {
+  const me = await whoIs(base);
+  const cfg = { ...base, site: base.site ?? me.site };
+  const target = `${me.name ?? cfg.site}${me.url ? ` (${me.url})` : ""}`;
+
+  if (!flags.yes && !flags.json && stdin.isTTY && !(await confirm(`Publish to ${target}?`))) {
     console.log("Nothing was published.");
     return 1;
   }
@@ -238,59 +256,136 @@ export async function deploy(args, flags) {
     return body.blocked ? 1 : 0;
   }
 
-  // Truthful about the two states a "successful" upload can land in. The
-  // app's own route learned this the hard way: a publish that the safety
-  // scan blocked used to come back as a plain success, and every door
-  // printed the live URL of a site that was now offline.
-  if (body.blocked) {
-    console.log("");
-    console.log(bold("Uploaded, but this version is offline."));
-    console.log(`  ${body.message ?? "Our safety check flagged it and it is under review."}`);
-    console.log(dim("  Nothing was deleted. Check your email."));
-    return 1;
-  }
+  return report(body, me);
+}
 
+/**
+ * Say what actually happened, and only say "Live." when it is serving. An
+ * upload can land in four states (blocked, waiting for the scan, not live
+ * yet, live) and each gets its own line; possible-secret warnings print
+ * whatever the state.
+ */
+export function report(body, me = {}) {
   console.log("");
-  console.log(green(bold("Live.")));
-  if (body.url) console.log(`  ${body.url}`);
-  console.log(
-    dim(`  ${body.fileCount} file${body.fileCount === 1 ? "" : "s"} · ${body.deploymentId}`),
-  );
-  if (body.serving === false) {
-    console.log("");
-    console.log(
-      `  ${bold("Not serving yet")} — this site has not been published from your dashboard.`,
-    );
-    console.log(dim(`  Your files are here and will go live the moment it is.`));
+  let code = 0;
+  if (body.blocked) {
+    console.log(bold("Uploaded, but this version is offline."));
+    console.log(`  ${body.message ?? MESSAGES.blocked}`);
+    console.log(dim("  Nothing was deleted. Check your email."));
+    code = 1;
+  } else if (body.waiting) {
+    console.log(bold("Uploaded. Checking your files, live in a moment."));
+    console.log(`  ${MESSAGES.scan_pending_publish}`);
+    if (body.url) console.log(`  ${body.url}`);
+  } else if (body.serving === false) {
+    console.log(bold("Uploaded, but the site isn't live yet."));
+    console.log(`  ${MESSAGES.not_live_yet}`);
+    if (me.name) console.log(dim(`  ${me.name}`));
+  } else {
+    console.log(green(bold("Live.")));
+    if (body.url) console.log(`  ${body.url}`);
   }
-  return 0;
+  console.log(dim(`  ${body.fileCount} file${body.fileCount === 1 ? "" : "s"} · ${body.deploymentId}`));
+  if (Array.isArray(body.warnings) && body.warnings.length) {
+    console.log("");
+    console.log(bold("Heads up:"));
+    for (const w of body.warnings) console.log(`  ${w}`);
+  }
+  return code;
 }
 
 /* ── status ──────────────────────────────────────────────────────────────── */
 
 export async function status(_args, flags) {
   const base = requireAuth(flags);
-  const cfg = { ...base, site: await resolveSite(base) };
+  const me = await whoIs(base);
+  const cfg = { ...base, site: base.site ?? me.site };
   const body = await call(cfg, `${cfg.origin}/api/deploy/${cfg.site}/deployments`);
   const rows = body.deployments ?? [];
 
   if (flags.json) {
-    console.log(JSON.stringify(body, null, 2));
+    console.log(JSON.stringify({ ...body, site: { id: me.site, name: me.name, url: me.url, state: me.state ?? null } }, null, 2));
     return 0;
+  }
+  console.log(`${bold(me.name ?? cfg.site)}${me.url ? `  ${me.url}` : ""}`);
+  if (me.state && me.state !== "live") {
+    const words = { nothing_published: "Nothing is published yet.", held: "Offline while it is under review.", not_live_yet: "Not live yet - publish it from your dashboard." };
+    console.log(dim(`  ${words[me.state] ?? me.state}`));
   }
   if (rows.length === 0) {
     console.log("No deploys yet.");
     return 0;
   }
+  console.log("");
   for (const row of rows.slice(0, 10)) {
     // The person's own clock, not UTC (developers walkthrough, 26 Oct 2026).
     const when = row.createdAt
       ? new Date(row.createdAt).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
       : "";
-    const mark = row.status === "active" ? green("●") : row.status === "failed" ? "✗" : dim("○");
+    const mark = row.status === "active" ? green("●") : row.status === "failed" ? red("✗") : dim("○");
     const files = typeof row.fileCount === "number" ? `${row.fileCount} file${row.fileCount === 1 ? "" : "s"}` : "";
-    console.log(`${mark} ${when}  ${String(row.status).padEnd(10)} ${dim(`${row.source ?? ""} ${files}`.trim())}`);
+    const live = row.status === "active" ? " (live)" : "";
+    console.log(`${mark} ${when}  ${String(row.status).padEnd(10)} ${dim(`${row.id ?? ""} ${row.source ?? ""} ${files}${live}`.replace(/\s+/g, " ").trim())}`);
+    // Why it failed, in the server's words (the catalog line when we have one).
+    if (row.status === "failed" && (row.errorDetail || row.errorCode)) {
+      console.log(`    ${red(explain(row.errorCode, row.errorDetail))}`);
+    }
   }
+  console.log(dim("\nGo back to an earlier version: npx lemonade-host rollback"));
+  return 0;
+}
+
+/* ── rollback ────────────────────────────────────────────────────────────── */
+
+/** The release to go back to: the one named, or the newest that was live before the current one. */
+export function pickRollbackTarget(rows, wanted) {
+  if (wanted) return rows.find((r) => r.id === wanted) ?? null;
+  return rows.find((r) => r.status === "superseded") ?? null;
+}
+
+export async function rollback(args, flags) {
+  const base = requireAuth(flags);
+  const me = await whoIs(base);
+  const cfg = { ...base, site: base.site ?? me.site };
+  const list = await call(cfg, `${cfg.origin}/api/deploy/${cfg.site}/deployments`);
+  const rows = list.deployments ?? [];
+  const wanted = args[0] ?? null;
+  const target = pickRollbackTarget(rows, wanted);
+  if (!target) {
+    throw new Refused(
+      wanted
+        ? `No release with the id ${wanted} on this site. Run: npx lemonade-host status  to see the ids.`
+        : "There is no earlier version to go back to yet. Run: npx lemonade-host status  to see what this site has.",
+      { code: wanted ? "no_such_release" : "no_earlier_version" },
+    );
+  }
+  if (target.status === "active") throw new Refused(MESSAGES.already_live, { code: "already_live" });
+
+  if (!flags.yes && !flags.json) {
+    const when = target.createdAt ? new Date(target.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : target.id;
+    if (!stdin.isTTY) throw new Refused("Rolling back needs a yes: pass --yes to go back without being asked.");
+    if (!(await confirm(`Put ${me.name ?? "this site"} back to the version from ${when} (${target.id})?`))) {
+      console.log("Nothing was changed.");
+      return 1;
+    }
+  }
+  const body = await call(cfg, `${cfg.origin}/api/deploy/${cfg.site}/restore`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ deploymentId: target.id }),
+  });
+  if (flags.json) {
+    console.log(JSON.stringify(body, null, 2));
+    return body.blocked ? 1 : 0;
+  }
+  console.log("");
+  if (body.blocked) {
+    console.log(bold("Restored, but that version is offline."));
+    console.log(`  ${MESSAGES.blocked}`);
+    return 1;
+  }
+  console.log(green(bold("Rolled back.")));
+  console.log(`  ${body.url ?? me.url} is serving ${body.deploymentId ?? target.id} again.`);
   return 0;
 }
 
@@ -301,16 +396,17 @@ export async function whoami(_args, flags) {
   // Asking the SERVER rather than reading the config back: the question is
   // "does this token still work, and what does it reach", and neither half
   // can be answered locally.
-  const me = await call(cfg, `${cfg.origin}/api/deploy/whoami`);
+  const me = await whoIs(cfg);
   if (flags.json) {
     console.log(JSON.stringify(me, null, 2));
     return 0;
   }
   console.log(`Token is valid and reaches ${bold(me.name)} (${me.site})`);
   console.log(`  ${me.url}`);
-  if (!me.serving) {
-    console.log(dim("  Not serving yet — this site has not been published from the dashboard."));
-  }
+  if (me.access) console.log(dim(`  Scope: ${{ "read-only": "Read-only", publish: "Publish", manage: "Manage" }[me.access] ?? me.access}`));
+  if (me.state === "nothing_published") console.log(dim("  Nothing is published yet."));
+  else if (me.state === "held") console.log(dim("  Offline while it is under review."));
+  else if (me.state === "not_live_yet" || me.serving === false) console.log(dim("  Not live yet - this site has not been published from the dashboard."));
   console.log(dim(`  ${cfg.origin} · token from ${cfg.from.token}`));
   return 0;
 }
@@ -318,41 +414,46 @@ export async function whoami(_args, flags) {
 /* ── login ───────────────────────────────────────────────────────────────── */
 
 export async function login(_args, flags) {
-  // No token given: approve in the browser. --token keeps the paste path (CI, scripts).
+  // Browser approval by default. It needs a person, so with no terminal it
+  // refuses at once (a pipe used to wait ten minutes for nobody) unless
+  // --token is given, or the caller says it will relay the code (--wait,
+  // or LEMONADE_CLIENT=mcp for an AI assistant).
   if (!flags.token) {
-    const origin = (flags.origin ?? process.env.LEMONADE_ORIGIN ?? "https://app.lemonadehost.com").replace(/\/+$/, "");
-    await approveInBrowser(origin);
-    console.log(dim("Now: lemonade deploy"));
-    return 0;
-  }
-  const rl = readline.createInterface({ input: stdin, output: stdout });
-  try {
-    console.log("Paste a deploy token from your dashboard, under Developers > Tokens.");
-    console.log(dim("It is shown once — there is no copy on our side to read back.\n"));
-
-    const token = (flags.token ?? (await rl.question("Deploy token (lm_…): "))).trim();
-    if (!looksLikeToken(token)) {
-      throw new Refused("That does not look like a deploy token — they start with lm_.");
+    const relayed = flags.wait || process.env.LEMONADE_CLIENT === "mcp";
+    if (!stdin.isTTY && !stdout.isTTY && !relayed) {
+      throw new Refused(
+        "Logging in by browser needs a terminal, and this isn't one.\n" +
+          "  Run it in a terminal, or pass a token:  npx lemonade-host login --token lm_...\n" +
+          "  An assistant that will show you the code can pass --wait.",
+      );
     }
     const origin = (flags.origin ?? process.env.LEMONADE_ORIGIN ?? "https://app.lemonadehost.com").replace(/\/+$/, "");
-
-    // No site prompt. The token names its own site, so asking would be
-    // asking somebody to look up an id we are about to be told anyway —
-    // and this is also how the token is PROVED before it is written down.
-    // Saving an unverified token means the first real deploy is where you
-    // learn it was wrong, by which time the one place the raw value existed
-    // has usually been closed.
-    const probe = { token, origin, from: { token: "prompt", site: null } };
-    const me = await call(probe, `${origin}/api/deploy/whoami`);
-
-    const where = save({ token, site: me.site, origin });
-    console.log(`\n${green("Saved.")} ${dim(where)} (readable only by you)`);
-    console.log(`Publishing to ${bold(me.name)} — ${me.url}`);
-    console.log(dim("Now: lemonade deploy"));
+    await approveInBrowser(origin);
+    console.log(dim("Now: npx lemonade-host deploy"));
     return 0;
-  } finally {
-    rl.close();
   }
+  console.log("Checking that token...");
+  const token = String(flags.token).trim();
+  if (!looksLikeToken(token)) {
+    throw new Refused("That does not look like a deploy token — they start with lm_.");
+  }
+  const origin = (flags.origin ?? process.env.LEMONADE_ORIGIN ?? "https://app.lemonadehost.com").replace(/\/+$/, "");
+
+  // No site prompt. The token names its own site, so asking would be
+  // asking somebody to look up an id we are about to be told anyway —
+  // and this is also how the token is PROVED before it is written down.
+  // Saving an unverified token means the first real deploy is where you
+  // learn it was wrong, by which time the one place the raw value existed
+  // has usually been closed.
+  const probe = { token, origin, from: { token: "--token", site: null } };
+  const me = await whoIs(probe);
+
+  const where = save({ token, site: me.site, origin });
+  console.log(`\n${green("Saved.")} ${dim(where)} (readable only by you)`);
+  console.log(`Publishing to ${bold(me.name)} — ${me.url}`);
+  console.log(dim("Now: npx lemonade-host deploy"));
+  return 0;
 }
 
 export const CONFIG_FILE = CONFIG_PATH;
+export { waitWords };
