@@ -1,0 +1,33 @@
+# Publish to npm when a version tag (v*) is pushed, using npm trusted publishing
+# (GitHub OIDC). No npm token or login is stored anywhere: npm trusts this
+# workflow file in this repo, configured once on npmjs.com:
+#   lemonade-host > Settings > Trusted publishing > GitHub Actions,
+#   repo Analytix-Media/lemonade-cli, workflow publish.yml.
+name: Publish to npm
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Tag matches package.json version
+        run: |
+          v="$(node -p "require('./package.json').version")"
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match package.json $v"; exit 1; }
+      - name: bsdtar as tar (the zip test reads zips with libarchive, like macOS)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libarchive-tools
+          mkdir -p "$RUNNER_TEMP/bin" && ln -s "$(command -v bsdtar)" "$RUNNER_TEMP/bin/tar"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: npm test
+      - run: npm install -g npm@latest
+      - run: npm publish --provenance --access public
