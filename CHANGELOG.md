@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- Published from GitHub Actions with npm trusted publishing and provenance. No code changes.
+
 ## 0.2.1
 
 - `deploy --yes` (and `--json`) in a project root with no build folder no longer publishes the whole project. It refuses with exit code 2, names the build folders it looked for, and says how to publish one (`npx lemonade-host deploy dist`). The new `--allow-project-root` flag is the explicit opt-in. A folder you name yourself is unchanged.
