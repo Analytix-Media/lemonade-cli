@@ -227,3 +227,87 @@ test("per-command help and no command", async () => {
   assert.equal(r.code, 1);
   assert.equal(JSON.parse(r.out).error, "unknown_command");
 });
+
+/* ── 0.2.1 ─────────────────────────────────────────────────────────────── */
+
+import { explain, MESSAGES, retryClock } from "../src/messages.mjs";
+
+test("rate limit message gives the clock time, the date when not today, and the limit when sent", () => {
+  const now = new Date(2026, 10, 24, 13, 0, 0); // local 24 Nov 2026 13:00
+  assert.equal(retryClock(2732, now), "13:46");
+  assert.equal(retryClock(3 * 3600, now), "16:00");
+  assert.equal(retryClock(12 * 3600, now), "01:00 on Nov 25");
+  assert.equal(retryClock(null, now), null);
+
+  assert.equal(
+    explain("rate_limited", null, { retryAfter: 2732, now }),
+    "Too many deploys in a row for this site. You have reached the limit for this kind of request. Try again in 46 minutes, at 13:46.",
+  );
+  assert.equal(
+    explain("rate_limited", null, { retryAfter: 2732, limit: 20, now }),
+    "Too many deploys in a row for this site. The limit is 20 requests of this kind. Try again in 46 minutes, at 13:46.",
+  );
+  assert.equal(explain("rate_limited", null, { now }), "Too many deploys in a row for this site. You have reached the limit for this kind of request. Try again in a minute.");
+  for (const code of ["rate_limited", "slow_down"]) assert.doesNotMatch(explain(code, null, { retryAfter: 90, now }), /[-\u2013\u2014]/);
+});
+
+test("a 429 over HTTP shows the time, and the limit from RateLimit-Limit", async () => {
+  reset();
+  const dir = site();
+  routes["POST /api/deploy/st_new"] = { status: 429, headers: { "retry-after": "2732", "ratelimit-limit": "20" }, body: { ok: false, error: "rate_limited" } };
+  let r = await run(["deploy", dir, "--yes"]);
+  assert.match(r.err, /The limit is 20 requests of this kind\. Try again in 46 minutes, at \d\d:\d\d/);
+  routes["POST /api/deploy/st_new"] = { status: 429, headers: { "retry-after": "2732" }, body: { ok: false, error: "rate_limited" } };
+  r = await run(["deploy", dir, "--yes"]);
+  assert.match(r.err, /You have reached the limit for this kind of request\. Try again in 46 minutes, at \d\d:\d\d/);
+});
+
+test("the too_large message says 100 MB, and no source says 256 MB", () => {
+  assert.match(MESSAGES.too_large, /100 MB/);
+  assert.doesNotMatch(MESSAGES.too_large, /256/);
+  for (const f of ["../README.md", "../bin/lemonade.mjs"]) {
+    assert.doesNotMatch(fs.readFileSync(path.join(import.meta.dirname, f), "utf8"), /256 MB/);
+  }
+});
+
+test("deploy --yes refuses a project root (exit 2); --allow-project-root opts in; a named folder is unchanged", async () => {
+  reset();
+  routes["POST /api/deploy/st_new"] = { body: { ok: true, deploymentId: "dp_1", fileCount: 3, url: "u", serving: true } };
+  const root = site({ "package.json": "{}", "src/app.js": "x", "README.md": "r" });
+  const cwdRun = (args) => new Promise((resolve) => {
+    const h = fs.mkdtempSync(path.join(SCRATCH, "home-"));
+    const p = spawn(process.execPath, [BIN, ...args], { cwd: root, env: { ...process.env, HOME: h, USERPROFILE: h, LEMONADE_ORIGIN: origin, LEMONADE_TOKEN: TOKEN, CI: "" }, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    p.stdout.on("data", (c) => (out += c));
+    p.stderr.on("data", (c) => (err += c));
+    p.on("close", (code) => resolve({ code, out, err }));
+  });
+
+  let r = await cwdRun(["deploy", "--yes"]);
+  assert.equal(r.code, 2);
+  assert.match(r.err, /dist, build, out, public, _site/);
+  assert.match(r.err, /npx lemonade-host deploy dist/);
+  assert.match(r.err, /--allow-project-root/);
+  assert.ok(!seen.some((s) => s.key.startsWith("POST")));
+
+  r = await cwdRun(["deploy", "--yes", "--json"]);
+  assert.equal(r.code, 2);
+  assert.equal(JSON.parse(r.out).error, "project_root");
+
+  r = await cwdRun(["deploy", "--yes", "--allow-project-root"]);
+  assert.equal(r.code, 0);
+  assert.ok(seen.some((s) => s.key === "POST /api/deploy/st_new"));
+
+  seen.length = 0;
+  r = await cwdRun(["deploy", ".", "--yes"]);
+  assert.equal(r.code, 0);
+
+  // a plain static site (index.html, no project markers) still deploys with --yes
+  seen.length = 0;
+  const plain = site({ "index.html": "<h1>x</h1>" });
+  r = await run(["deploy", "--yes", "--dir", plain]);
+  assert.equal(r.code, 0);
+
+  r = await run(["help", "deploy"]);
+  assert.match(r.out, /--allow-project-root/);
+});
