@@ -25,12 +25,12 @@ export const MESSAGES = {
   /* traffic */
   deploy_in_progress:
     "A deploy for this site is already running. Wait for it to finish — it will not be long.",
-  // {wait} is filled from the server's Retry-After (see explain).
-  rate_limited: "Too many deploys in a row for this site. Try again in {wait}.",
-  slow_down: "Too many requests. Try again in {wait}.",
+  // {wait} is filled from the server's Retry-After and {limit} from its limit header, when it sends one (see explain).
+  rate_limited: "Too many deploys in a row for this site. {limit} Try again in {wait}.",
+  slow_down: "Too many requests. {limit} Try again in {wait}.",
   server_busy: "The publish queue is full right now. Nothing was published; try again in {wait}.",
   too_large:
-    "That folder is over the 256 MB upload limit. Publish the built output rather than the whole project — dist/ or build/ — or drop the largest files.",
+    "That folder is over the 100 MB upload limit. Publish the built output rather than the whole project — dist/ or build/ — or drop the largest files.",
   empty_body: "There was nothing to upload.",
   upload_interrupted:
     "The upload stopped part-way. Nothing was published; run it again.",
@@ -86,12 +86,46 @@ export function waitWords(seconds) {
   return `${h} hour${h === 1 ? "" : "s"}`;
 }
 
+const pad = (n) => String(n).padStart(2, "0");
+
+/**
+ * The clock time (local, HH:MM) when it is fine to try again, with the date
+ * when that is not today: "14:32", or "02:10 on Nov 25".
+ */
+export function retryClock(seconds, now = new Date()) {
+  const n = Number(seconds);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // Rounded UP to the minute, so the clock never says a time that is still too early.
+  const at = new Date(Math.ceil((now.getTime() + n * 1000) / 60000) * 60000);
+  const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  const sameDay = at.getFullYear() === now.getFullYear() && at.getMonth() === now.getMonth() && at.getDate() === now.getDate();
+  if (sameDay) return time;
+  const month = at.toLocaleString("en-US", { month: "short" });
+  return `${time} on ${month} ${at.getDate()}`;
+}
+
+/** "46 minutes, at 14:32": how long, and when. Without a Retry-After it only says "a minute". */
+export function retryWords(seconds, now = new Date()) {
+  const clock = retryClock(seconds, now);
+  return clock ? `${waitWords(seconds)}, at ${clock}` : waitWords(seconds);
+}
+
+/** The server's limit as a sentence, or the plain version when it did not send one. */
+export function limitWords(limit) {
+  const n = Number(limit);
+  return Number.isFinite(n) && n > 0
+    ? `The limit is ${Math.floor(n)} requests of this kind.`
+    : "You have reached the limit for this kind of request.";
+}
+
 /**
  * The sentence for a server error. `retryAfter` is the Retry-After header in
  * seconds (rate limits and a busy server send it); without one it says "a
- * minute". The server's own `message` is used when we have no line for the code.
+ * minute". `limit` is RateLimit-Limit / X-RateLimit-Limit (or a JSON `limit`)
+ * when the server sends it. The server's own `message` is used when we have no
+ * line for the code. `now` is injectable for tests.
  */
-export function explain(code, fallbackMessage, { retryAfter = null } = {}) {
+export function explain(code, fallbackMessage, { retryAfter = null, limit = null, now = new Date() } = {}) {
   const line = code && MESSAGES[code] ? MESSAGES[code] : fallbackMessage ? fallbackMessage : code ? `The server refused it: ${code}` : "The server refused it.";
-  return line.replace("{wait}", waitWords(retryAfter));
+  return line.replace("{wait}", retryWords(retryAfter, now)).replace("{limit}", limitWords(limit));
 }

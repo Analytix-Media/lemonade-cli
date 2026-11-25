@@ -11,7 +11,7 @@
  */
 
 import os from "node:os";
-import { waitWords } from "./messages.mjs";
+import { retryWords } from "./messages.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -49,7 +49,7 @@ export async function deviceLogin({ origin, client = "cli", deviceName = os.host
   const start = await json(res);
   if (!res.ok || !start?.device_code) {
     const wait = Number(res.headers?.get?.("retry-after"));
-    throw new DeviceError(res.status === 429 ? `Too many sign-in attempts from here. Try again in ${waitWords(wait)}.` : `Could not start sign-in (HTTP ${res.status}).`);
+    throw new DeviceError(res.status === 429 ? `Too many sign-in attempts from here. Try again in ${retryWords(wait)}.` : `Could not start sign-in (HTTP ${res.status}).`);
   }
 
   say("");
