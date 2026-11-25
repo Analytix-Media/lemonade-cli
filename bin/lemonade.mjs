@@ -30,6 +30,7 @@ Options
   --origin URL       point at another instance, e.g. staging
   --yes, -y          do not ask first
   --json             machine-readable output, errors included
+  --allow-project-root  let deploy publish a project folder (source, package.json) when no build folder is found
   --include-hidden   publish dotfiles and node_modules too (secret files, like .env and keys, are never published)
   --version, -v      print the version
   --help, -h         this (or: npx lemonade-host help <command>)
@@ -49,14 +50,17 @@ Zip a folder and publish it to your site.
                    public/ or _site/ if one holds an index.html; if none does it
                    asks before publishing the current folder (default No).
   --dir FOLDER     the same as the folder argument
-  --yes, -y        do not ask (CI)
+  --yes, -y        do not ask (CI). It never publishes a project root: with no
+                   folder named and no build folder, a folder that holds
+                   package.json, src/, .git or .env is refused (exit code 2).
+  --allow-project-root  publish that project folder anyway (rare; usually you want dist/)
   --include-hidden also publish dotfiles and node_modules. Secret files (.env,
                    .env.*, *.pem, *.key, credentials.json, ssh keys) are never published.
   --json           print the server's answer as JSON
 
 It says "Live." only when the site is serving. Otherwise it tells you the
 version is checking, waiting for you to publish the site, or offline.
-Exit code: 0 published (or checking), 1 offline or refused.
+Exit code: 0 published (or checking), 1 offline or refused, 2 a project root was not published.
 `,
   status: `npx lemonade-host status
 
@@ -90,7 +94,7 @@ whether the site is live. A token that ended or was revoked says so.
 `,
 };
 
-const BOOLEAN = new Set(["yes", "y", "json", "include-hidden", "help", "h", "version", "v", "wait"]);
+const BOOLEAN = new Set(["yes", "y", "json", "include-hidden", "allow-project-root", "help", "h", "version", "v", "wait"]);
 const VALUED = new Set(["token", "site", "origin", "dir"]);
 
 function parse(argv) {
@@ -156,6 +160,7 @@ async function main() {
   // The two spellings of the same intent, normalised once.
   flags.yes = flags.yes || flags.y || false;
   flags.includeHidden = flags["include-hidden"] || false;
+  flags.allowProjectRoot = flags["allow-project-root"] || false;
   return (await run(args, flags)) ?? 0;
 }
 
@@ -177,7 +182,7 @@ function fail(err) {
     console.error(`\n${message}`);
     if (!expected && process.env.LEMONADE_DEBUG) console.error(err?.stack ?? err);
   }
-  process.exit(1);
+  process.exit(err?.exitCode ?? 1);
 }
 
 main()

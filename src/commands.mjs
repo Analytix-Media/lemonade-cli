@@ -113,6 +113,19 @@ export function chooseDir(arg, cwd = process.cwd()) {
   return { dir: cwd, guessed: false };
 }
 
+/**
+ * Does this folder look like a project (source, config, secrets) rather than a
+ * finished site? A top-level index.html with none of the markers is a plain
+ * static site and is fine. package.json, .git or .env mark a project root even
+ * with an index.html; a src/ (or app/, lib/) with no index.html does too.
+ */
+export function looksLikeProjectRoot(dir) {
+  const has = (n) => fs.existsSync(path.join(dir, n));
+  if (has("package.json") || has(".git") || has(".env")) return true;
+  if (has("index.html")) return false;
+  return ["src", "app", "lib", "node_modules"].some((n) => has(n) && fs.statSync(path.join(dir, n)).isDirectory());
+}
+
 /** Y/n question. No terminal = no answer: callers decide what that means. */
 async function confirm(question, { defaultYes = true } = {}) {
   const rl = readline.createInterface({ input: stdin, output: stdout });
@@ -121,6 +134,13 @@ async function confirm(question, { defaultYes = true } = {}) {
   if (answer === "") return defaultYes;
   return answer === "y" || answer === "yes";
 }
+
+/** The server's limit, if it names one: RateLimit-Limit, X-RateLimit-Limit, or a `limit` in the JSON error. */
+const limitFrom = (res, body) => {
+  const raw = res.headers.get("ratelimit-limit") ?? res.headers.get("x-ratelimit-limit") ?? body?.limit ?? null;
+  const n = Number.parseInt(String(raw ?? ""), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
 
 const retryAfterSeconds = (res) => {
   const n = Number(res.headers.get("retry-after"));
@@ -153,7 +173,7 @@ async function call(cfg, url, init = {}) {
     const code = body?.reason && body?.error === "unauthorized" ? body.reason : body?.error ?? body?.errorCode ?? (res.status === 429 ? "rate_limited" : res.status === 503 ? "server_busy" : null);
     // A refused token: the server's own sentence says why (and when it ended).
     const serverLine = body?.error === "unauthorized" && body?.message ? body.message : null;
-    throw new Refused(serverLine ?? explain(code, body?.message ?? null, { retryAfter }), { code, status: res.status, retryAfter });
+    throw new Refused(serverLine ?? explain(code, body?.message ?? null, { retryAfter, limit: limitFrom(res, body) }), { code, status: res.status, retryAfter });
   }
   if (!body) {
     throw new Refused(
@@ -176,6 +196,18 @@ export async function deploy(args, flags) {
   // is what a shell user reaches for. Both work, and the flag wins.
   const explicitDir = flags.dir ?? args[0];
   const { dir, guessed } = chooseDir(explicitDir);
+
+  // --yes means "do not ask", never "publish my source". A project root is refused
+  // unless it is opted into by name. (A folder named on the command line is the person's choice.)
+  if (!explicitDir && !guessed && !flags.allowProjectRoot && (flags.yes || flags.json) && looksLikeProjectRoot(dir)) {
+    throw new Refused(
+      `This folder looks like a project (it has source files, package.json, .git or .env), not a built site, so nothing was published.\n` +
+        `  I looked for a build folder with an index.html (${BUILD_DIRS.join(", ")}) and found none.\n` +
+        `  Build it, then publish that folder: npx lemonade-host deploy dist\n` +
+        `  To publish this whole folder anyway, pass --allow-project-root.`,
+      { code: "project_root", exitCode: 2 },
+    );
+  }
 
   const { files, skipped } = collect(dir, { includeHidden: flags.includeHidden });
   if (files.length === 0) {
@@ -222,11 +254,11 @@ export async function deploy(args, flags) {
 
   // No folder named and no built output found: the current folder is a guess, and it is often the
   // whole project (source, README, notes). Say so and ask, default No.
-  if (!explicitDir && !guessed) {
+  if (!explicitDir && !guessed && !flags.allowProjectRoot) {
     if (!flags.json && !flags.yes) {
       console.log(`  ${bold("No dist, build, out, public or _site folder with an index.html here")} - this would publish the current folder as it is.`);
       if (!stdin.isTTY) {
-        throw new Refused("Pass the folder to publish (npx lemonade-host deploy ./dist), or --yes to publish this one.");
+        throw new Refused("Pass the folder to publish (npx lemonade-host deploy ./dist), or --allow-project-root to publish this one.");
       }
       if (!(await confirm("Publish the current folder anyway?", { defaultYes: false }))) {
         console.log("Nothing was published.");

@@ -4,11 +4,12 @@
  * code when there was one (it goes into --json output).
  */
 export class Refused extends Error {
-  constructor(message, { code = null, status = null, retryAfter = null } = {}) {
+  constructor(message, { code = null, status = null, retryAfter = null, exitCode = 1 } = {}) {
     super(message);
     this.code = code;
     this.status = status;
     this.retryAfter = retryAfter;
+    this.exitCode = exitCode;
     this.expected = true;
   }
 }
