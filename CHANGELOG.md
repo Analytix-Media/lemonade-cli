@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- `deploy --yes` (and `--json`) in a project root with no build folder no longer publishes the whole project. It refuses with exit code 2, names the build folders it looked for, and says how to publish one (`npx lemonade-host deploy dist`). The new `--allow-project-root` flag is the explicit opt-in. A folder you name yourself is unchanged.
+- Rate limit messages now say the clock time to try again (local time, with the date if it is not today), for example "Try again in 46 minutes, at 14:32." They also say the limit when the server sends it (RateLimit-Limit, X-RateLimit-Limit or a `limit` field in the error). The server does not send one today, so for now the message says "You have reached the limit for this kind of request." with no number; the number appears on its own once the server adds the header.
+- The "folder too large" message said 256 MB; the upload limit is 100 MB.
+
 ## 0.2.0
 
 **Login by browser, rollback, honest deploys.**

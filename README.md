@@ -43,7 +43,19 @@ browser.
 | `lemonade whoami` | Which site the current token points at |
 
 Useful flags: `--dir`, `--token`, `--origin` (for staging), `--yes` (skip
-the confirmation), `--json` (machine-readable output).
+the confirmation), `--json` (machine-readable output), `--allow-project-root`
+(see below).
+
+## Project folders are not published by accident
+
+With no folder named and no `dist/`, `build/`, `out/`, `public/` or `_site/`
+that holds an `index.html`, `deploy` would publish the current folder. If that
+folder looks like a project (it has `package.json`, `src/`, `.git` or `.env`),
+`deploy --yes` refuses and exits with code 2, and tells you to publish the build
+folder: `npx lemonade-host deploy dist`. At a terminal, `deploy` without `--yes`
+asks first (default No). For the rare case where you really mean the whole
+folder, pass `--allow-project-root`. Naming a folder yourself is always taken
+as your choice.
 
 ## A token reaches exactly one site
 
