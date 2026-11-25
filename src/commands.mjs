@@ -126,16 +126,43 @@ export function looksLikeProjectRoot(dir) {
   return ["src", "app", "lib", "node_modules"].some((n) => has(n) && fs.statSync(path.join(dir, n)).isDirectory());
 }
 
-/** Y/n question. No terminal = no answer: callers decide what that means. */
-async function confirm(question, { defaultYes = true } = {}) {
+/**
+ * Y/n question. No terminal = no answer: callers decide what that means.
+ * Ctrl+D (EOF), a closed stdin and Ctrl+C all mean "never mind": they throw
+ * Canceled (exit 130, the shell's code for an interrupted command), never a
+ * stack trace and never a hang. On a closed non-terminal stdin readline
+ * never settles the question by itself, so the close event settles it.
+ */
+export async function confirm(question, { defaultYes = true } = {}) {
   const rl = readline.createInterface({ input: stdin, output: stdout });
-  const answer = (await rl.question(`${question} ${defaultYes ? "[Y/n]" : "[y/N]"} `)).trim().toLowerCase();
-  rl.close();
+  const canceled = () => new Refused("Canceled.", { code: "canceled", exitCode: 130 });
+  let cancel;
+  const gone = new Promise((_, reject) => {
+    cancel = () => reject(canceled());
+  });
+  rl.on("close", cancel);
+  rl.on("SIGINT", cancel);
+  let answer;
+  try {
+    answer = (await Promise.race([rl.question(`${question} ${defaultYes ? "[Y/n]" : "[y/N]"} `), gone])).trim().toLowerCase();
+  } catch (err) {
+    stdout.write("\n");
+    // AbortError ("Aborted with Ctrl+D") or our own cancel: the same plain line.
+    throw err instanceof Refused ? err : canceled();
+  } finally {
+    rl.off("close", cancel);
+    rl.close();
+  }
   if (answer === "") return defaultYes;
   return answer === "y" || answer === "yes";
 }
 
 /** The server's limit, if it names one: RateLimit-Limit, X-RateLimit-Limit, or a `limit` in the JSON error. */
+const scopeFrom = (res, body) => {
+  const raw = res.headers.get("x-ratelimit-scope") ?? body?.scope ?? body?.limitScope ?? body?.reason ?? null;
+  return typeof raw === "string" ? raw : null;
+};
+
 const limitFrom = (res, body) => {
   const raw = res.headers.get("ratelimit-limit") ?? res.headers.get("x-ratelimit-limit") ?? body?.limit ?? null;
   const n = Number.parseInt(String(raw ?? ""), 10);
@@ -173,7 +200,7 @@ async function call(cfg, url, init = {}) {
     const code = body?.reason && body?.error === "unauthorized" ? body.reason : body?.error ?? body?.errorCode ?? (res.status === 429 ? "rate_limited" : res.status === 503 ? "server_busy" : null);
     // A refused token: the server's own sentence says why (and when it ended).
     const serverLine = body?.error === "unauthorized" && body?.message ? body.message : null;
-    throw new Refused(serverLine ?? explain(code, body?.message ?? null, { retryAfter, limit: limitFrom(res, body) }), { code, status: res.status, retryAfter });
+    throw new Refused(serverLine ?? explain(code, body?.message ?? null, { retryAfter, limit: limitFrom(res, body), scope: scopeFrom(res, body) }), { code, status: res.status, retryAfter });
   }
   if (!body) {
     throw new Refused(

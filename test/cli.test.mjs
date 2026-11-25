@@ -241,13 +241,13 @@ test("rate limit message gives the clock time, the date when not today, and the 
 
   assert.equal(
     explain("rate_limited", null, { retryAfter: 2732, now }),
-    "Too many deploys in a row for this site. You have reached the limit for this kind of request. Try again in 46 minutes, at 13:46.",
+    "Too many deploys in a row for this site or account. You have reached the limit for this kind of request. Try again in 46 minutes, at 13:46.",
   );
   assert.equal(
     explain("rate_limited", null, { retryAfter: 2732, limit: 20, now }),
-    "Too many deploys in a row for this site. The limit is 20 requests of this kind. Try again in 46 minutes, at 13:46.",
+    "Too many deploys in a row for this site or account. The limit is 20 requests of this kind. Try again in 46 minutes, at 13:46.",
   );
-  assert.equal(explain("rate_limited", null, { now }), "Too many deploys in a row for this site. You have reached the limit for this kind of request. Try again in a minute.");
+  assert.equal(explain("rate_limited", null, { now }), "Too many deploys in a row for this site or account. You have reached the limit for this kind of request. Try again in a minute.");
   for (const code of ["rate_limited", "slow_down"]) assert.doesNotMatch(explain(code, null, { retryAfter: 90, now }), /[-\u2013\u2014]/);
 });
 
@@ -310,4 +310,130 @@ test("deploy --yes refuses a project root (exit 2); --allow-project-root opts in
 
   r = await run(["help", "deploy"]);
   assert.match(r.out, /--allow-project-root/);
+});
+
+/* ── 0.2.3 ─────────────────────────────────────────────────────────────── */
+
+import { spawnSync } from "node:child_process";
+
+const COMMANDS_WITH_HELP = ["deploy", "status", "rollback", "login", "whoami"];
+
+test("per-command help: <cmd> --help, <cmd> -h and help <cmd> print that command's help, exit 0, no network", async () => {
+  reset();
+  const helps = {};
+  for (const cmd of COMMANDS_WITH_HELP) {
+    for (const args of [[cmd, "--help"], [cmd, "-h"], ["help", cmd], [`${cmd} --help`]]) {
+      // No token, an origin nothing listens on: a network call (or a token check) would fail it.
+      const r = await run(args, { env: { LEMONADE_ORIGIN: "http://127.0.0.1:9", LEMONADE_TOKEN: "" } });
+      assert.equal(r.code, 0, `${args.join(" ")} exits 0`);
+      assert.match(r.out, new RegExp(`^npx lemonade-host ${cmd}\\b`), `${args.join(" ")} prints the ${cmd} help`);
+      assert.equal(r.err, "");
+      helps[cmd] ??= r.out;
+      assert.equal(r.out, helps[cmd], "the three spellings print the same text");
+    }
+  }
+  assert.equal(new Set(Object.values(helps)).size, COMMANDS_WITH_HELP.length, "five different texts");
+  assert.equal(seen.length, 0, "the fake server was never called");
+  // the list of commands in the general help is the list that has help
+  const general = await run(["--help"]);
+  for (const cmd of COMMANDS_WITH_HELP) assert.match(general.out, new RegExp(`npx lemonade-host ${cmd}\\b`));
+  const bad = await run(["help", "frobnicate"]);
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /Unknown command: frobnicate/);
+});
+
+test("rate limit wording names who is limited: site, account, and neither known", () => {
+  const now = new Date(2026, 10, 24, 13, 0, 0);
+  const at = { retryAfter: 2732, now };
+  assert.equal(explain("rate_limited", null, { ...at, scope: "site" }), "Too many deploys in a row for this site. You have reached the limit for this kind of request. Try again in 46 minutes, at 13:46.");
+  assert.equal(explain("rate_limited", null, { ...at, scope: "account" }), "Too many deploys in a row for this account. You have reached the limit for this kind of request. Try again in 46 minutes, at 13:46.");
+  assert.equal(explain("rate_limited", null, { ...at, scope: "account_day" }), "Too many deploys in a row for this account today. You have reached the limit for this kind of request. Try again in 46 minutes, at 13:46.");
+  assert.equal(explain("rate_limited", null, { ...at, scope: "unpaid_drafts" }), "Too many deploys in a row for unpaid drafts on this account. You have reached the limit for this kind of request. Try again in 46 minutes, at 13:46.");
+  assert.match(explain("rate_limited", null, at), /for this site or account\./);
+});
+
+test("a 429 over HTTP says site or account from X-RateLimit-Scope or the JSON scope, with the clock time either way", async () => {
+  reset();
+  const dir = site();
+  const say = async (headers, body) => {
+    routes["POST /api/deploy/st_new"] = { status: 429, headers: { "retry-after": "1929", ...headers }, body: { ok: false, error: "rate_limited", ...body } };
+    return run(["deploy", dir, "--yes"]);
+  };
+  let r = await say({ "x-ratelimit-scope": "site" });
+  assert.match(r.err, /Too many deploys in a row for this site\. .*Try again in 33 minutes, at \d\d:\d\d\./);
+  r = await say({ "x-ratelimit-scope": "account" });
+  assert.match(r.err, /Too many deploys in a row for this account\. .*Try again in 33 minutes, at \d\d:\d\d\./);
+  assert.doesNotMatch(r.err, /this site/);
+  r = await say({}, { scope: "account" });
+  assert.match(r.err, /for this account\./);
+  r = await say({});
+  assert.match(r.err, /for this site or account\. .*at \d\d:\d\d\./);
+});
+
+/* Ctrl+D / closed stdin at a prompt. */
+
+test("confirm(): a closed stdin or EOF cancels with exit 130, no trace, no hang", () => {
+  const script = `import { confirm } from ${JSON.stringify(new URL("../src/commands.mjs", import.meta.url).href)};
+import { Refused } from ${JSON.stringify(new URL("../src/errors.mjs", import.meta.url).href)};
+try { await confirm("Publish?"); console.log("ANSWERED"); }
+catch (e) { console.log(e instanceof Refused ? "CANCELED " + e.message + " " + e.exitCode + " " + e.code : "OTHER " + e.message); }
+process.exit(0);`;
+  for (const input of ["", "\u0004"]) {
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", script], { input, encoding: "utf8", timeout: 10000 });
+    assert.equal(r.status, 0, `stdin ${JSON.stringify(input)} finished (not killed by the timeout)`);
+    assert.match(r.stdout, /CANCELED Canceled\. 130 canceled/);
+  }
+  // a real answer still works on a pipe
+  const yes = spawnSync(process.execPath, ["--input-type=module", "-e", script.replace('console.log("ANSWERED")', 'console.log("ANSWERED")')], { input: "y\n", encoding: "utf8", timeout: 10000 });
+  assert.match(yes.stdout, /ANSWERED/);
+});
+
+const HAVE_PTY = spawnSync("python3", ["-c", "import pty"]).status === 0;
+
+test("Ctrl+D at the publish prompt, in a real terminal: Canceled., exit 130, nothing published", { skip: !HAVE_PTY && "no python3 pty" }, async () => {
+  reset();
+  const dir = site();
+  routes["POST /api/deploy/st_new"] = { body: { ok: true, deploymentId: "dp_1", fileCount: 1, serving: true } };
+  const driver = `
+import os, pty, sys, time, select
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(sys.argv[1], sys.argv[1:])
+out = b""
+sent = False
+deadline = time.time() + 20
+while time.time() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try:
+            d = os.read(fd, 4096)
+        except OSError:
+            break
+        if not d:
+            break
+        out += d
+        if not sent and b"[Y/n]" in out:
+            os.write(fd, b"\\x04")
+            sent = True
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(out.decode("utf8", "replace"))
+sys.stdout.write("\\nEXIT %d" % os.waitstatus_to_exitcode(status))
+`;
+  const home = fs.mkdtempSync(path.join(SCRATCH, "home-"));
+  // Async, not spawnSync: the fake server lives in this process and must keep answering.
+  const r = await new Promise((resolve) => {
+    const p = spawn("python3", ["-I", "-c", driver, process.execPath, BIN, "deploy", dir], {
+      env: { ...process.env, HOME: home, USERPROFILE: home, LEMONADE_ORIGIN: origin, LEMONADE_TOKEN: TOKEN, CI: "" },
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30000,
+    });
+    let stdout = "";
+    p.stdout.on("data", (c) => (stdout += c));
+    p.on("close", () => resolve({ stdout }));
+  });
+  assert.match(r.stdout, /Publish to .*\[Y\/n\]/);
+  assert.match(r.stdout, /Canceled\./);
+  assert.match(r.stdout, /EXIT 130/);
+  assert.doesNotMatch(r.stdout, /unexpected|Aborted|support@|\.mjs:\d+/);
+  assert.ok(!seen.some((s) => s.key === "POST /api/deploy/st_new"), "nothing was uploaded");
 });

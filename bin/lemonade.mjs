@@ -124,12 +124,24 @@ function parse(argv) {
   return { args, flags };
 }
 
+/**
+ * A wrapper that hands the whole command line over as ONE argument
+ * ("deploy --help") is still a command line: split that one argument.
+ */
+function normalise(argv) {
+  if (argv.length === 1 && /\s/.test(argv[0].trim())) {
+    const words = argv[0].trim().split(/\s+/);
+    if (words[0] === "help" || words[0] in COMMANDS) return words;
+  }
+  return argv;
+}
+
 const COMMANDS = { deploy, status, rollback, login, whoami };
 
 let jsonMode = process.argv.includes("--json");
 
 async function main() {
-  const { args, flags } = parse(process.argv.slice(2));
+  const { args, flags } = parse(normalise(process.argv.slice(2)));
   jsonMode = Boolean(flags.json);
 
   if (flags.version || flags.v) {
@@ -142,11 +154,13 @@ async function main() {
   // is not an error: exit 0 so a script that pipes it does not fail.
   if (command === "help") {
     const named = args.shift();
-    console.log(named && HELP[named] ? HELP[named] : USAGE);
+    if (named && !HELP[named]) throw new Refused(`Unknown command: ${named}\n\n${USAGE}`, { code: "unknown_command" });
+    console.log(named ? HELP[named] : USAGE);
     return 0;
   }
   if (flags.help || flags.h) {
-    console.log(command && HELP[command] ? HELP[command] : USAGE);
+    if (command && !HELP[command]) throw new Refused(`Unknown command: ${command}\n\n${USAGE}`, { code: "unknown_command" });
+    console.log(command ? HELP[command] : USAGE);
     return 0;
   }
   if (!command) {

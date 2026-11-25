@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Per-command help works everywhere: `deploy --help`, `deploy -h` and `help deploy` (and the same for `status`, `rollback`, `login`, `whoami`) print that command's help and exit 0, with no network call and no token needed. A command line handed over as one quoted argument ("deploy --help") is split first. `help <something that is not a command>` is now an "Unknown command" error instead of the general usage.
+- Rate limit messages say who is limited. With the server's `X-RateLimit-Scope` header (or a `scope` field in the error) they say "for this site", "for this account", "for this account today" or "for unpaid drafts on this account". The server does not send the scope yet, so until it does the message says "for this site or account" rather than blaming the site for an account limit. Every rate limit message, per site or per account, gives the clock time to try again.
+- Ctrl+D (end of input), Ctrl+C or a closed stdin at a question ("Publish to ...? [Y/n]", rollback) now prints "Canceled." and exits with code 130. It used to say "Something unexpected went wrong: Aborted with Ctrl+D", and on a closed pipe it could hang. Nothing is published.
 ## 0.2.2
 
 - Published from GitHub Actions with npm trusted publishing and provenance. No code changes.

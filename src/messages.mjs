@@ -26,7 +26,7 @@ export const MESSAGES = {
   deploy_in_progress:
     "A deploy for this site is already running. Wait for it to finish — it will not be long.",
   // {wait} is filled from the server's Retry-After and {limit} from its limit header, when it sends one (see explain).
-  rate_limited: "Too many deploys in a row for this site. {limit} Try again in {wait}.",
+  rate_limited: "Too many deploys in a row for {scope}. {limit} Try again in {wait}.",
   slow_down: "Too many requests. {limit} Try again in {wait}.",
   server_busy: "The publish queue is full right now. Nothing was published; try again in {wait}.",
   too_large:
@@ -110,6 +110,28 @@ export function retryWords(seconds, now = new Date()) {
   return clock ? `${waitWords(seconds)}, at ${clock}` : waitWords(seconds);
 }
 
+/**
+ * Who the limit counts. The server has a per-site hourly limit and per-account
+ * ones (hour, day, unpaid drafts), and says which one in `scope` (header
+ * X-RateLimit-Scope, or a scope/reason field in the JSON error). A server that
+ * names none gets the neutral line: better than telling an account-wide limit
+ * it was this site's.
+ */
+export function scopeWords(scope) {
+  switch (scope) {
+    case "site":
+      return "this site";
+    case "account":
+      return "this account";
+    case "account_day":
+      return "this account today";
+    case "unpaid_drafts":
+      return "unpaid drafts on this account";
+    default:
+      return "this site or account";
+  }
+}
+
 /** The server's limit as a sentence, or the plain version when it did not send one. */
 export function limitWords(limit) {
   const n = Number(limit);
@@ -125,7 +147,7 @@ export function limitWords(limit) {
  * when the server sends it. The server's own `message` is used when we have no
  * line for the code. `now` is injectable for tests.
  */
-export function explain(code, fallbackMessage, { retryAfter = null, limit = null, now = new Date() } = {}) {
+export function explain(code, fallbackMessage, { retryAfter = null, limit = null, scope = null, now = new Date() } = {}) {
   const line = code && MESSAGES[code] ? MESSAGES[code] : fallbackMessage ? fallbackMessage : code ? `The server refused it: ${code}` : "The server refused it.";
-  return line.replace("{wait}", retryWords(retryAfter, now)).replace("{limit}", limitWords(limit));
+  return line.replace("{wait}", retryWords(retryAfter, now)).replace("{limit}", limitWords(limit)).replace("{scope}", scopeWords(scope));
 }
